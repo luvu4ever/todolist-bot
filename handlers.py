@@ -1,3 +1,4 @@
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import ALLOWED_USERS
@@ -141,39 +142,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @check_user_access
 async def idea_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View all events and ideas"""
+    """View all events and ideas sorted by time"""
     user_id = update.effective_user.id
     all_items = data_manager.get_all_user_items(user_id)
     
-    response = "📋 **Events & Ideas**\n\n"
+    response = "📋 **Events & Ideas** (sắp xếp theo thời gian)\n\n"
+    
+    # Sort function for items
+    def get_sort_key(item):
+        time_info = item.get("time_info", {})
+        if time_info.get("has_time") and time_info.get("datetime"):
+            try:
+                return datetime.fromisoformat(time_info["datetime"])
+            except:
+                pass
+        # Items without time go to the end
+        return datetime.max
     
     # Events
     if all_items["events"]:
+        sorted_events = sorted(all_items["events"], key=get_sort_key)
+        
+        # Separate timed and non-timed events
+        timed_events = [e for e in sorted_events if e["time_info"].get("has_time")]
+        no_time_events = [e for e in sorted_events if not e["time_info"].get("has_time")]
+        
         response += "📅 **Events:**\n"
-        for event in all_items["events"][-10:]:  # Last 10
-            time_display = event["time_info"].get("display_time", "")
-            response += f"• {event['text']}"
-            if event["time_info"].get("has_time"):
-                response += f" ⏰ {time_display}"
-            response += f" (ID: {event['id']})\n"
+        
+        # Timed events first
+        if timed_events:
+            response += "⏰ *Có thời gian:*\n"
+            for event in timed_events[-10:]:  # Last 10
+                time_display = event["time_info"].get("display_time", "")
+                response += f"• {event['text']}"
+                if time_display:
+                    response += f" - {time_display}"
+                response += f" (ID: {event['id']})\n"
+        
+        # Non-timed events
+        if no_time_events:
+            if timed_events:
+                response += "\n📝 *Chưa có thời gian:*\n"
+            for event in no_time_events[-5:]:  # Last 5
+                response += f"• {event['text']} (ID: {event['id']})\n"
+        
         response += "\n"
     
     # Ideas
     if all_items["ideas"]:
+        sorted_ideas = sorted(all_items["ideas"], key=get_sort_key)
+        
         response += "💡 **Ideas:**\n"
-        for idea in all_items["ideas"][-10:]:  # Last 10
-            response += f"• {idea['text']} (ID: {idea['id']})\n"
+        for idea in sorted_ideas[-10:]:  # Last 10
+            time_display = idea["time_info"].get("display_time", "")
+            response += f"• {idea['text']}"
+            if idea["time_info"].get("has_time") and time_display:
+                response += f" - {time_display}"
+            response += f" (ID: {idea['id']})\n"
         response += "\n"
     
     if not all_items["events"] and not all_items["ideas"]:
         response += "Chưa có events hoặc ideas nào.\n"
-        response += "Hãy thêm bằng cách gửi tin nhắn như: 'event thứ 6 thợ lắp đồ'"
+        response += "Hãy thêm bằng cách gửi tin nhắn như: 'event thứ 6 thợ lắp đồ'\n\n"
+    
+    # Add removal instructions
+    response += "🗑️ **Xóa items:**\n"
+    response += "• `/eventdone [mô tả]` - xóa event\n" 
+    response += "• `/ideadone [mô tả]` - xóa idea"
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
 @check_user_access
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View todolist"""
+    """View todolist sorted by time"""
     user_id = update.effective_user.id
     todos = data_manager.get_user_todos(user_id)
     
@@ -183,18 +224,53 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, parse_mode='Markdown')
         return
     
-    response = "📋 **Todolist**\n\n"
+    # Sort todos by datetime
+    def get_sort_key(todo):
+        time_info = todo.get("time_info", {})
+        if time_info.get("has_time") and time_info.get("datetime"):
+            try:
+                return datetime.fromisoformat(time_info["datetime"])
+            except:
+                pass
+        # Items without time go to the end
+        return datetime.max
     
-    for todo in todos:
-        status = "☑️" if todo["completed"] else "⬜"
-        time_display = todo["time_info"].get("display_time", "")
-        
-        response += f"{status} {todo['text']}"
+    sorted_todos = sorted(todos, key=get_sort_key)
+    
+    response = "📋 **Todolist** (sắp xếp theo thời gian)\n\n"
+    
+    # Group by time status
+    timed_todos = []
+    no_time_todos = []
+    
+    for todo in sorted_todos:
         if todo["time_info"].get("has_time"):
-            response += f" ⏰ {time_display}"
-        response += f" (ID: {todo['id']})\n"
+            timed_todos.append(todo)
+        else:
+            no_time_todos.append(todo)
     
-    response += f"\n📊 Tổng: {len(todos)} tasks"
+    # Show timed todos first
+    if timed_todos:
+        response += "⏰ **Có thời gian:**\n"
+        for todo in timed_todos:
+            status = "☑️" if todo["completed"] else "⬜"
+            time_display = todo["time_info"].get("display_time", "")
+            
+            response += f"{status} {todo['text']}"
+            if time_display:
+                response += f" - {time_display}"
+            response += f" (ID: {todo['id']})\n"
+        response += "\n"
+    
+    # Show non-timed todos
+    if no_time_todos:
+        response += "📝 **Chưa có thời gian:**\n"
+        for todo in no_time_todos:
+            status = "☑️" if todo["completed"] else "⬜"
+            response += f"{status} {todo['text']} (ID: {todo['id']})\n"
+        response += "\n"
+    
+    response += f"📊 Tổng: {len(todos)} tasks"
     response += "\n💡 Dùng `/todone [mô tả]` để hoàn thành task"
     
     await update.message.reply_text(response, parse_mode='Markdown')
@@ -227,6 +303,68 @@ async def todone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ Không tìm thấy task: '{description}'\n\n"
             f"Dùng `/list` để xem danh sách todos",
+            parse_mode='Markdown'
+        )
+
+@check_user_access
+async def eventdone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove event by description"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Cần mô tả event cần xóa.\n"
+            "Ví dụ: `/eventdone thợ lắp đồ`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    description = " ".join(context.args)
+    
+    # Try to remove by description
+    success = data_manager.remove_event(user_id, description=description)
+    
+    if success:
+        await update.message.reply_text(
+            f"🗑️ **Event đã xóa!**\n\n"
+            f"📅 {description}",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ Không tìm thấy event: '{description}'\n\n"
+            f"Dùng `/idea` để xem danh sách events",
+            parse_mode='Markdown'
+        )
+
+@check_user_access
+async def ideadone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove idea by description"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Cần mô tả idea cần xóa.\n"
+            "Ví dụ: `/ideadone mua sữa`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    description = " ".join(context.args)
+    
+    # Try to remove by description
+    success = data_manager.remove_idea(user_id, description=description)
+    
+    if success:
+        await update.message.reply_text(
+            f"🗑️ **Idea đã xóa!**\n\n"
+            f"💡 {description}",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ Không tìm thấy idea: '{description}'\n\n"
+            f"Dùng `/idea` để xem danh sách ideas",
             parse_mode='Markdown'
         )
 
