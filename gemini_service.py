@@ -6,21 +6,13 @@ import re
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 def parse_vietnamese_time(text):
     """
-    Parse Vietnamese time expressions using enhanced logic
-    Returns parsed datetime and cleaned text
+    Parse Vietnamese time expressions using Gemini AI
+    Returns parsed datetime and cleaned text in format "thứ x, ngày dd/mm"
     """
-    # Always try simple parsing first for reliability
-    simple_result = fallback_time_parse(text)
-    
-    # If simple parsing found time, use it
-    if simple_result["has_time"]:
-        return simple_result
-    
-    # Try Gemini as backup
     current_date = datetime.now()
     current_weekday_vn = get_vietnamese_weekday_name(current_date.weekday())
     current_date_str = current_date.strftime("%d/%m/%Y")
@@ -30,35 +22,56 @@ Phân tích thời gian trong câu tiếng Việt. Hôm nay là {current_weekday
 
 Câu: "{text}"
 
-QUAN TRỌNG: Chỉ trả về JSON, không giải thích gì thêm.
+Quy tắc xử lý thời gian:
+- "hôm nay" = hôm nay
+- "mai", "ngày mai" = ngày mai
+- "thứ X" = thứ X tuần này nếu chưa qua, nếu đã qua thì thứ X tuần sau
+- "thứ X tuần sau" = thứ X của tuần sau
+- "tuần sau" = tuần sau (thứ 2)
+- "tháng sau" = ngày 1 tháng sau
+- "dd/mm" hoặc "ngày dd/mm" = ngày dd/mm năm nay, nếu đã qua thì năm sau
 
-Format JSON:
+Format JSON trả về:
 {{
     "has_time": true/false,
     "datetime": "YYYY-MM-DD HH:MM",
-    "display_time": "thứ X ngày DD/MM",
+    "display_time": "thứ X, ngày DD/MM",
     "parsed_text": "text sau khi bỏ thời gian"
 }}
 
 Ví dụ:
-- "thứ 4 liên hệ gửi mèo" → {{"has_time": true, "datetime": "2025-08-06 09:00", "display_time": "thứ 4 ngày 06/08", "parsed_text": "liên hệ gửi mèo"}}
-- "7/8 tiêm mèo" → {{"has_time": true, "datetime": "2025-08-07 09:00", "display_time": "thứ 4 ngày 07/08", "parsed_text": "tiêm mèo"}}
+- "thứ 4 liên hệ gửi mèo" → {{"has_time": true, "datetime": "2025-08-13 09:00", "display_time": "thứ 4, ngày 13/08", "parsed_text": "liên hệ gửi mèo"}}
+- "7/8 tiêm mèo" → {{"has_time": true, "datetime": "2025-08-07 09:00", "display_time": "thứ 4, ngày 07/08", "parsed_text": "tiêm mèo"}}
+- "thứ 6 tuần sau đi chơi" → {{"has_time": true, "datetime": "2025-08-22 09:00", "display_time": "thứ 6, ngày 22/08", "parsed_text": "đi chơi"}}
+
+QUAN TRỌNG: Chỉ trả về JSON hợp lệ, không giải thích gì thêm.
 """
 
     try:
-        response = model.generate_content(prompt)
+        response = gemini_model.generate_content(prompt)
         clean_response = response.text.strip()
+        
         # Remove markdown code blocks if present
         if clean_response.startswith('```'):
-            clean_response = clean_response.split('\n', 1)[1]
-        if clean_response.endswith('```'):
-            clean_response = clean_response.rsplit('\n', 1)[0]
+            lines = clean_response.split('\n')
+            clean_response = '\n'.join(lines[1:-1]) if len(lines) > 2 else clean_response
         
         result = json.loads(clean_response)
+        
+        # Validate result structure
+        if not isinstance(result, dict):
+            raise ValueError("Invalid JSON structure")
+        
+        # Ensure required fields
+        result.setdefault("has_time", False)
+        result.setdefault("datetime", None)
+        result.setdefault("display_time", "")
+        result.setdefault("parsed_text", text)
+        
         return result
     except Exception as e:
         print(f"Gemini parsing error: {e}")
-        return simple_result
+        return fallback_time_parse(text)
 
 def fallback_time_parse(text):
     """Enhanced fallback parser for Vietnamese time"""
@@ -68,32 +81,56 @@ def fallback_time_parse(text):
     datetime_str = None
     
     current_date = datetime.now()
-    
-    # Pattern matching for Vietnamese time expressions
     text_lower = text.lower().strip()
     
-    # 1. Weekday patterns (thứ 2, thứ 3, etc.)
-    weekday_match = re.search(r'thứ\s+([2-7])', text_lower)
-    if weekday_match:
-        weekday_num = int(weekday_match.group(1)) - 2  # Convert to 0-6 (Mon-Sun)
+    # 1. Today patterns
+    if re.search(r'hôm\s+nay', text_lower):
+        has_time = True
+        datetime_str = current_date.strftime("%Y-%m-%d 09:00")
+        display_time = f"{get_vietnamese_weekday_name(current_date.weekday())}, ngày {current_date.strftime('%d/%m')}"
+        parsed_text = re.sub(r'hôm\s+nay', '', text, flags=re.IGNORECASE).strip()
+    
+    # 2. Tomorrow patterns
+    elif re.search(r'(?:ngày\s+)?mai', text_lower):
+        tomorrow = current_date + timedelta(days=1)
+        has_time = True
+        datetime_str = tomorrow.strftime("%Y-%m-%d 09:00")
+        display_time = f"{get_vietnamese_weekday_name(tomorrow.weekday())}, ngày {tomorrow.strftime('%d/%m')}"
+        parsed_text = re.sub(r'(?:ngày\s+)?mai', '', text, flags=re.IGNORECASE).strip()
+    
+    # 3. Weekday patterns with "tuần sau"
+    elif re.search(r'thứ\s+([2-7])\s+tuần\s+sau', text_lower):
+        weekday_match = re.search(r'thứ\s+([2-7])\s+tuần\s+sau', text_lower)
+        weekday_num = int(weekday_match.group(1)) - 2  # Convert to 0-6
+        next_week_date = get_next_weekday(weekday_num, weeks_ahead=1)
+        
+        has_time = True
+        datetime_str = next_week_date.strftime("%Y-%m-%d 09:00")
+        display_time = f"{get_vietnamese_weekday_name(weekday_num)}, ngày {next_week_date.strftime('%d/%m')}"
+        parsed_text = re.sub(r'thứ\s+[2-7]\s+tuần\s+sau', '', text, flags=re.IGNORECASE).strip()
+    
+    # 4. Regular weekday patterns
+    elif re.search(r'thứ\s+([2-7])', text_lower):
+        weekday_match = re.search(r'thứ\s+([2-7])', text_lower)
+        weekday_num = int(weekday_match.group(1)) - 2  # Convert to 0-6
         next_date = get_next_weekday(weekday_num)
         
         has_time = True
-        datetime_str = next_date.strftime("%Y-%m-%d 09:00")  # Default to 9 AM
-        display_time = f"{get_vietnamese_weekday_name(weekday_num)} ngày {next_date.strftime('%d/%m')}"
+        datetime_str = next_date.strftime("%Y-%m-%d 09:00")
+        display_time = f"{get_vietnamese_weekday_name(weekday_num)}, ngày {next_date.strftime('%d/%m')}"
         parsed_text = re.sub(r'thứ\s+[2-7]', '', text, flags=re.IGNORECASE).strip()
     
-    # 2. Sunday pattern
+    # 5. Sunday patterns
     elif re.search(r'chủ\s*nhật', text_lower):
         next_date = get_next_weekday(6)  # Sunday = 6
         has_time = True
         datetime_str = next_date.strftime("%Y-%m-%d 09:00")
-        display_time = f"chủ nhật ngày {next_date.strftime('%d/%m')}"
+        display_time = f"chủ nhật, ngày {next_date.strftime('%d/%m')}"
         parsed_text = re.sub(r'chủ\s*nhật', '', text, flags=re.IGNORECASE).strip()
     
-    # 3. Date patterns (7/8, ngày 7/8, 19/10)
-    date_match = re.search(r'(?:ngày\s+)?(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text)
-    if date_match:
+    # 6. Date patterns (7/8, ngày 7/8, 19/10)
+    elif re.search(r'(?:ngày\s+)?(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text):
+        date_match = re.search(r'(?:ngày\s+)?(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text)
         day = int(date_match.group(1))
         month = int(date_match.group(2))
         year = int(date_match.group(3)) if date_match.group(3) else current_date.year
@@ -107,44 +144,10 @@ def fallback_time_parse(text):
             has_time = True
             datetime_str = target_date.strftime("%Y-%m-%d 09:00")
             weekday_vn = get_vietnamese_weekday_name(target_date.weekday())
-            display_time = f"{weekday_vn} ngày {target_date.strftime('%d/%m')}"
+            display_time = f"{weekday_vn}, ngày {target_date.strftime('%d/%m')}"
             parsed_text = re.sub(r'(?:ngày\s+)?\d{1,2}/\d{1,2}(?:/\d{4})?', '', text).strip()
         except ValueError:
             pass  # Invalid date
-    
-    # 4. Time patterns (5h, 14h30, 9h sáng)
-    elif re.search(r'\d{1,2}h(?:\d{2})?', text_lower):
-        time_match = re.search(r'(\d{1,2})h(\d{2})?(?:\s*(sáng|chiều|tối))?', text_lower)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2)) if time_match.group(2) else 0
-            period = time_match.group(3)
-            
-            # Adjust hour based on period
-            if period == 'chiều' and hour < 12:
-                hour += 12
-            elif period == 'tối' and hour < 12:
-                hour += 12
-            
-            has_time = True
-            datetime_str = current_date.strftime(f"%Y-%m-%d {hour:02d}:{minute:02d}")
-            display_time = f"hôm nay {hour:02d}:{minute:02d}"
-            parsed_text = re.sub(r'\d{1,2}h(?:\d{2})?(?:\s*(?:sáng|chiều|tối))?', '', text, flags=re.IGNORECASE).strip()
-    
-    # 5. Relative time (mai, ngày mai, hôm nay)
-    elif re.search(r'(?:ngày\s+)?mai', text_lower):
-        tomorrow = current_date + timedelta(days=1)
-        has_time = True
-        datetime_str = tomorrow.strftime("%Y-%m-%d 09:00")
-        weekday_vn = get_vietnamese_weekday_name(tomorrow.weekday())
-        display_time = f"{weekday_vn} ngày {tomorrow.strftime('%d/%m')} (mai)"
-        parsed_text = re.sub(r'(?:ngày\s+)?mai', '', text, flags=re.IGNORECASE).strip()
-    
-    elif re.search(r'hôm\s+nay', text_lower):
-        has_time = True
-        datetime_str = current_date.strftime("%Y-%m-%d 09:00")
-        display_time = "hôm nay"
-        parsed_text = re.sub(r'hôm\s+nay', '', text, flags=re.IGNORECASE).strip()
     
     # Clean up parsed text
     parsed_text = re.sub(r'\s+', ' ', parsed_text).strip()
@@ -153,8 +156,7 @@ def fallback_time_parse(text):
         "has_time": has_time,
         "datetime": datetime_str,
         "display_time": display_time,
-        "parsed_text": parsed_text,
-        "original_time_expression": ""
+        "parsed_text": parsed_text
     }
 
 def get_vietnamese_weekday_name(weekday_num):
@@ -170,43 +172,43 @@ def get_vietnamese_weekday_name(weekday_num):
     }
     return names.get(weekday_num, f"thứ {weekday_num + 2}")
 
-def get_next_weekday(weekday):
+def get_next_weekday(weekday, weeks_ahead=0):
     """Get next occurrence of a weekday (0=Monday, 6=Sunday)"""
     current = datetime.now()
-    days_ahead = weekday - current.weekday()
-    if days_ahead <= 0:  # Target day already happened this week
+    days_ahead = weekday - current.weekday() + (weeks_ahead * 7)
+    if days_ahead <= 0 and weeks_ahead == 0:  # Target day already happened this week
         days_ahead += 7
     return current + timedelta(days=days_ahead)
 
-def classify_message_type(text):
+def parse_priority(text):
     """
-    Use Gemini to classify message type
-    Returns: 'event', 'todo', 'idea'
+    Parse priority from text using Gemini AI
+    Returns: 'urgent', 'normal', 'chill'
     """
     prompt = f"""
-Phân loại câu sau đây thuộc loại nào:
+Phân tích mức độ ưu tiên trong câu tiếng Việt:
 "{text}"
 
-Loại:
-- "event": Sự kiện, cuộc họp, lịch hẹn (có thời gian cụ thể)
-- "todo": Công việc cần làm, nhiệm vụ
-- "idea": Ý tưởng, ghi chú chung, không phải công việc cụ thể
+Mức độ ưu tiên:
+- "urgent": gấp, khẩn cấp, cần làm ngay, quan trọng, deadline gần
+- "normal": bình thường, không có từ khóa đặc biệt
+- "chill": không gấp, rảnh rỗi, khi nào có thời gian, thảnh thơi
 
-Trả về chỉ một từ: event, todo, hoặc idea
+Trả về chỉ một từ: urgent, normal, hoặc chill
 """
 
     try:
-        response = model.generate_content(prompt)
+        response = gemini_model.generate_content(prompt)
         result = response.text.strip().lower()
-        if result in ['event', 'todo', 'idea']:
+        if result in ['urgent', 'normal', 'chill']:
             return result
-        return 'idea'  # default
+        return 'normal'  # default
     except:
-        # Simple fallback classification
+        # Simple fallback priority detection
         text_lower = text.lower()
-        if any(word in text_lower for word in ['event', 'meeting', 'cuộc họp', 'hẹn']):
-            return 'event'
-        elif any(word in text_lower for word in ['todo', 'làm', 'dọn', 'mua', 'task']):
-            return 'todo'
+        if any(word in text_lower for word in ['gấp', 'khẩn cấp', 'ngay', 'quan trọng', 'deadline']):
+            return 'urgent'
+        elif any(word in text_lower for word in ['rảnh', 'thảnh thơi', 'không gấp', 'khi nào']):
+            return 'chill'
         else:
-            return 'idea'
+            return 'normal'

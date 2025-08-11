@@ -2,15 +2,14 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import ALLOWED_USERS
-from gemini_service import parse_vietnamese_time, classify_message_type
-from data_storage import data_manager
-import re
+from gemini_service import parse_vietnamese_time, parse_priority
+from supabase_service import db_manager
 
 def check_user_access(func):
     """Decorator to check if user is allowed"""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
-        if ALLOWED_USERS and ALLOWED_USERS[0] and user_id not in ALLOWED_USERS:
+        if ALLOWED_USERS and user_id not in ALLOWED_USERS:
             await update.message.reply_text("❌ Bạn không có quyền sử dụng bot này.")
             return
         return await func(update, context)
@@ -20,359 +19,404 @@ def check_user_access(func):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler"""
     welcome_message = """
-🤖 **Smart Todolist & Calendar Bot**
+🤖 **Smart Todolist & Calendar Bot** 
 
-Chào mừng! Tôi có thể giúp bạn:
+Chào mừng! Tôi có thể giúp bạn quản lý:
 
-📅 **Events/Lịch hẹn:**
-- "event thứ 6 thợ lắp đồ"
-- "meeting ngày 19/10 lúc 14h"
+✅ **TODOS (Công việc):**
+- `/todo [công việc] [thời gian] [mức độ]`
+- `/todolist` - Xem danh sách todos
+- `/done [mô tả]` - Hoàn thành task (fuzzy search)
 
-✅ **Todos:**
-- "todo dọn nhà 5h"
-- "mua sắm ngày mai"
+📅 **EVENTS (Sự kiện):**
+- `/event [hoạt động] [thời gian]`
+- `/eventlist` - Xem danh sách events
 
-💡 **Ideas/Ý tưởng:**
-- "ghi nhớ mua sữa"
-- "ý tưởng cho dự án mới"
+💡 **IDEAS (Ý tưởng):**
+- `/idea [ý tưởng]`
+- `/idealist` - Xem danh sách ideas
 
-🎯 **Commands:**
-- `/idea` - Xem tất cả events và ideas
-- `/list` - Xem todolist
-- `/todone [mô tả]` - Hoàn thành task
-- `/help` - Trợ giúp
+⏰ **Thời gian hỗ trợ:**
+- hôm nay, mai, thứ 6, thứ 6 tuần sau
+- 19/10, ngày 25/12
+- Tự động chuyển thành "thứ X, ngày DD/MM"
 
-🧠 Tôi hiểu thời gian tiếng Việt: thứ 6, ngày 19/10, 5h, mai, v.v.
+🎯 **Mức độ ưu tiên todos:**
+- urgent (gấp) 🔴
+- normal (bình thường) 🟡  
+- chill (không gấp) 🟢
+
+**Ví dụ:**
+- `/todo dọn nhà thứ 6 gấp`
+- `/event meeting mai 14h`
+- `/idea học tiếng Nhật`
+- `/done dọn nhà`
 """
     await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
 @check_user_access
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enhanced help command"""
+    """Help command"""
     help_text = """
-🤖 **Smart Todolist & Calendar Bot - Hướng dẫn**
+🆘 **HƯỚNG DẪN CHI TIẾT**
 
-🧠 **AI Tự động phân loại:**
-Bot sẽ tự động hiểu bạn muốn thêm gì!
+✅ **TODOS:**
+• `/todo dọn nhà thứ 6` - Todo bình thường
+• `/todo học bài mai gấp` - Todo khẩn cấp
+• `/todo mua sắm chill` - Todo không gấp
+• `/todolist` - Xem todos (sắp xếp theo mức độ + thời gian)
+• `/done dọn` - Hoàn thành (tìm kiếm mờ)
 
-📅 **EVENTS (Lịch hẹn):**
-• `event thứ 6 thợ lắp đồ`
-• `meeting ngày 19/10 lúc 14h30`
-• `cuộc họp mai 9h sáng`
+📅 **EVENTS:**
+• `/event họp thứ 2 9h` - Tạo sự kiện
+• `/event sinh nhật 25/12` - Sự kiện theo ngày
+• `/eventlist` - Xem events (sắp xếp theo thời gian)
 
-✅ **TODOS (Công việc):**
-• `todo dọn nhà 5h`
-• `làm bài tập ngày mai`
-• `mua sắm thứ 7`
+💡 **IDEAS:**
+• `/idea học guitar` - Lưu ý tưởng
+• `/idealist` - Xem tất cả ideas
 
-💡 **IDEAS (Ý tưởng):**
-• `ghi nhớ mua sữa`
-• `ý tưởng app mới`
-• `nhớ gọi mẹ`
+⏰ **Định dạng thời gian:**
+• `hôm nay`, `mai`
+• `thứ 2`, `thứ 3`, ..., `chủ nhật`
+• `thứ 6 tuần sau` - Thứ 6 tuần tới
+• `19/10`, `ngày 25/12` - Ngày cụ thể
 
-⏰ **Định dạng thời gian hỗ trợ:**
-• **Thứ**: thứ 2, thứ 3, ..., thứ 7, chủ nhật
-• **Ngày**: ngày 19/10, 25/12/2024
-• **Giờ**: 5h, 14h30, 9h sáng, 17h chiều
-• **Tương đối**: hôm nay, mai, ngày mai
+🎯 **Mức độ ưu tiên (tự động nhận diện):**
+• 🔴 **urgent**: gấp, khẩn cấp, quan trọng
+• 🟡 **normal**: mặc định
+• 🟢 **chill**: không gấp, rảnh rỗi
 
-🎯 **Commands có sẵn:**
-• `/help` - Xem hướng dẫn này
-• `/idea` - Xem tất cả events & ideas
-• `/list` - Xem todolist hiện tại
-• `/todone [mô tả]` - Hoàn thành task
+🔍 **Fuzzy Search:**
+Bot sử dụng tìm kiếm mờ cho `/done` - bạn chỉ cần gõ một phần tên task!
 
-📝 **Ví dụ sử dụng:**
-1. Gửi: `event thứ 6 thợ lắp đồ`
-   → Bot tạo event vào thứ 6 tới
-
-2. Gửi: `todo dọn nhà 5h`
-   → Bot tạo todo hôm nay lúc 5h
-
-3. Gửi: `/todone dọn nhà`
-   → Bot đánh dấu task hoàn thành
-
-🤖 **Đặc biệt:**
-• Không cần gõ lệnh phức tạp
-• Chỉ cần gõ tự nhiên bằng tiếng Việt
-• AI sẽ hiểu và phân loại tự động
-
-**Bắt đầu bằng cách gửi tin nhắn như: "event mai gặp bạn"**
+**Bắt đầu ngay:** `/todo học tiếng Anh mai`
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 @check_user_access
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle natural language messages"""
-    text = update.message.text.strip()
-    user_id = update.effective_user.id
-    
-    # Parse time information
-    time_info = parse_vietnamese_time(text)
-    
-    # Classify message type
-    message_type = classify_message_type(text)
-    
-    # Clean text for storage
-    clean_text = time_info.get("parsed_text", text)
-    
-    if message_type == "event":
-        item = data_manager.add_event(user_id, clean_text, time_info)
-        emoji = "📅"
-        type_name = "Event"
-    elif message_type == "todo":
-        item = data_manager.add_todo(user_id, clean_text, time_info)
-        emoji = "✅"
-        type_name = "Todo"
-    else:  # idea
-        item = data_manager.add_idea(user_id, clean_text, time_info)
-        emoji = "💡"
-        type_name = "Idea"
-    
-    # Format response
-    time_display = time_info.get("display_time", "không xác định thời gian")
-    
-    response = f"{emoji} **{type_name} đã thêm!**\n\n"
-    response += f"📝 {clean_text}\n"
-    if time_info.get("has_time"):
-        response += f"⏰ {time_display}\n"
-    response += f"🆔 ID: {item['id']}"
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-@check_user_access
-async def idea_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View all events and ideas sorted by time"""
-    user_id = update.effective_user.id
-    all_items = data_manager.get_all_user_items(user_id)
-    
-    response = "📋 **Events & Ideas** (sắp xếp theo thời gian)\n\n"
-    
-    # Sort function for items
-    def get_sort_key(item):
-        time_info = item.get("time_info", {})
-        if time_info.get("has_time") and time_info.get("datetime"):
-            try:
-                return datetime.fromisoformat(time_info["datetime"])
-            except:
-                pass
-        # Items without time go to the end
-        return datetime.max
-    
-    # Events
-    if all_items["events"]:
-        sorted_events = sorted(all_items["events"], key=get_sort_key)
-        
-        # Separate timed and non-timed events
-        timed_events = [e for e in sorted_events if e["time_info"].get("has_time")]
-        no_time_events = [e for e in sorted_events if not e["time_info"].get("has_time")]
-        
-        response += "📅 **Events:**\n"
-        
-        # Timed events first
-        if timed_events:
-            response += "⏰ *Có thời gian:*\n"
-            for event in timed_events[-10:]:  # Last 10
-                time_display = event["time_info"].get("display_time", "")
-                response += f"• {event['text']}"
-                if time_display:
-                    response += f" - {time_display}"
-                response += f" (ID: {event['id']})\n"
-        
-        # Non-timed events
-        if no_time_events:
-            if timed_events:
-                response += "\n📝 *Chưa có thời gian:*\n"
-            for event in no_time_events[-5:]:  # Last 5
-                response += f"• {event['text']} (ID: {event['id']})\n"
-        
-        response += "\n"
-    
-    # Ideas
-    if all_items["ideas"]:
-        sorted_ideas = sorted(all_items["ideas"], key=get_sort_key)
-        
-        response += "💡 **Ideas:**\n"
-        for idea in sorted_ideas[-10:]:  # Last 10
-            time_display = idea["time_info"].get("display_time", "")
-            response += f"• {idea['text']}"
-            if idea["time_info"].get("has_time") and time_display:
-                response += f" - {time_display}"
-            response += f" (ID: {idea['id']})\n"
-        response += "\n"
-    
-    if not all_items["events"] and not all_items["ideas"]:
-        response += "Chưa có events hoặc ideas nào.\n"
-        response += "Hãy thêm bằng cách gửi tin nhắn như: 'event thứ 6 thợ lắp đồ'\n\n"
-    
-    # Add removal instructions
-    response += "🗑️ **Xóa items:**\n"
-    response += "• `/eventdone [mô tả]` - xóa event\n" 
-    response += "• `/ideadone [mô tả]` - xóa idea"
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-@check_user_access
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """View todolist sorted by time"""
-    user_id = update.effective_user.id
-    todos = data_manager.get_user_todos(user_id)
-    
-    if not todos:
-        response = "📋 **Todolist trống**\n\n"
-        response += "Thêm todo bằng cách gửi: 'todo dọn nhà 5h'"
-        await update.message.reply_text(response, parse_mode='Markdown')
-        return
-    
-    # Sort todos by datetime
-    def get_sort_key(todo):
-        time_info = todo.get("time_info", {})
-        if time_info.get("has_time") and time_info.get("datetime"):
-            try:
-                return datetime.fromisoformat(time_info["datetime"])
-            except:
-                pass
-        # Items without time go to the end
-        return datetime.max
-    
-    sorted_todos = sorted(todos, key=get_sort_key)
-    
-    response = "📋 **Todolist** (sắp xếp theo thời gian)\n\n"
-    
-    # Group by time status
-    timed_todos = []
-    no_time_todos = []
-    
-    for todo in sorted_todos:
-        if todo["time_info"].get("has_time"):
-            timed_todos.append(todo)
-        else:
-            no_time_todos.append(todo)
-    
-    # Show timed todos first
-    if timed_todos:
-        response += "⏰ **Có thời gian:**\n"
-        for todo in timed_todos:
-            status = "☑️" if todo["completed"] else "⬜"
-            time_display = todo["time_info"].get("display_time", "")
-            
-            response += f"{status} {todo['text']}"
-            if time_display:
-                response += f" - {time_display}"
-            response += f" (ID: {todo['id']})\n"
-        response += "\n"
-    
-    # Show non-timed todos
-    if no_time_todos:
-        response += "📝 **Chưa có thời gian:**\n"
-        for todo in no_time_todos:
-            status = "☑️" if todo["completed"] else "⬜"
-            response += f"{status} {todo['text']} (ID: {todo['id']})\n"
-        response += "\n"
-    
-    response += f"📊 Tổng: {len(todos)} tasks"
-    response += "\n💡 Dùng `/todone [mô tả]` để hoàn thành task"
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-@check_user_access
-async def todone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mark todo as completed"""
+async def todo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add new todo"""
     user_id = update.effective_user.id
     
     if not context.args:
         await update.message.reply_text(
-            "❌ Cần mô tả task cần hoàn thành.\n"
-            "Ví dụ: `/todone dọn nhà`",
+            "❌ Cần mô tả công việc!\n"
+            "Ví dụ: `/todo dọn nhà thứ 6 gấp`",
             parse_mode='Markdown'
         )
         return
     
-    description = " ".join(context.args)
+    text = " ".join(context.args)
     
-    # Try to complete by description
-    success = data_manager.complete_todo(user_id, description=description)
+    # Parse time and priority
+    time_info = parse_vietnamese_time(text)
+    priority = parse_priority(text)
+    
+    # Clean text
+    clean_text = time_info.get("parsed_text", text)
+    
+    # Remove priority keywords from text
+    priority_keywords = ['gấp', 'khẩn cấp', 'quan trọng', 'chill', 'không gấp', 'rảnh']
+    for keyword in priority_keywords:
+        clean_text = clean_text.replace(keyword, '').strip()
+    
+    clean_text = ' '.join(clean_text.split())  # Remove extra spaces
+    
+    # Add to database
+    todo = await db_manager.add_todo(user_id, clean_text, time_info, priority)
+    
+    if todo:
+        # Priority emojis
+        priority_emoji = {"urgent": "🔴", "normal": "🟡", "chill": "🟢"}
+        
+        response = f"✅ **Todo đã thêm!**\n\n"
+        response += f"📝 {clean_text}\n"
+        response += f"{priority_emoji.get(priority, '🟡')} Mức độ: {priority}\n"
+        
+        if time_info.get("has_time"):
+            response += f"⏰ {time_info.get('display_time', '')}\n"
+        
+        response += f"🆔 ID: {todo['id']}"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Lỗi khi thêm todo!")
+
+@check_user_access
+async def event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add new event"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Cần mô tả sự kiện!\n"
+            "Ví dụ: `/event meeting thứ 6 14h`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    text = " ".join(context.args)
+    
+    # Parse time
+    time_info = parse_vietnamese_time(text)
+    clean_text = time_info.get("parsed_text", text)
+    
+    # Add to database
+    event = await db_manager.add_event(user_id, clean_text, time_info)
+    
+    if event:
+        response = f"📅 **Event đã thêm!**\n\n"
+        response += f"📝 {clean_text}\n"
+        
+        if time_info.get("has_time"):
+            response += f"⏰ {time_info.get('display_time', '')}\n"
+        else:
+            response += "⏰ Chưa có thời gian cụ thể\n"
+        
+        response += f"🆔 ID: {event['id']}"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Lỗi khi thêm event!")
+
+@check_user_access
+async def idea_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add new idea"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Cần mô tả ý tưởng!\n"
+            "Ví dụ: `/idea học guitar`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    text = " ".join(context.args)
+    
+    # Add to database
+    idea = await db_manager.add_idea(user_id, text)
+    
+    if idea:
+        response = f"💡 **Idea đã thêm!**\n\n"
+        response += f"📝 {text}\n"
+        response += f"🆔 ID: {idea['id']}"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Lỗi khi thêm idea!")
+
+@check_user_access
+async def todolist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View todolist sorted by priority and time"""
+    user_id = update.effective_user.id
+    todos = await db_manager.get_todos(user_id)
+    
+    if not todos:
+        response = "📋 **Todolist trống**\n\n"
+        response += "Thêm todo bằng: `/todo công việc thời gian`"
+        await update.message.reply_text(response, parse_mode='Markdown')
+        return
+    
+    response = "📋 **TODOLIST** (sắp xếp theo mức độ + thời gian)\n\n"
+    
+    # Group by priority
+    urgent_todos = [t for t in todos if t.get("priority") == "urgent"]
+    normal_todos = [t for t in todos if t.get("priority") == "normal"]
+    chill_todos = [t for t in todos if t.get("priority") == "chill"]
+    
+    # Display urgent todos first
+    if urgent_todos:
+        response += "🔴 **URGENT:**\n"
+        for todo in urgent_todos:
+            status = "☑️" if todo["completed"] else "⬜"
+            time_display = ""
+            if todo["time_info"].get("has_time"):
+                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            
+            response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
+        response += "\n"
+    
+    # Normal todos
+    if normal_todos:
+        response += "🟡 **NORMAL:**\n"
+        for todo in normal_todos:
+            status = "☑️" if todo["completed"] else "⬜"
+            time_display = ""
+            if todo["time_info"].get("has_time"):
+                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            
+            response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
+        response += "\n"
+    
+    # Chill todos
+    if chill_todos:
+        response += "🟢 **CHILL:**\n"
+        for todo in chill_todos:
+            status = "☑️" if todo["completed"] else "⬜"
+            time_display = ""
+            if todo["time_info"].get("has_time"):
+                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            
+            response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
+        response += "\n"
+    
+    response += f"📊 Tổng: {len(todos)} tasks"
+    response += "\n💡 Dùng `/done [mô tả]` để hoàn thành"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@check_user_access
+async def eventlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View event list sorted by time"""
+    user_id = update.effective_user.id
+    events = await db_manager.get_events(user_id)
+    
+    if not events:
+        response = "📅 **Event list trống**\n\n"
+        response += "Thêm event bằng: `/event hoạt động thời gian`"
+        await update.message.reply_text(response, parse_mode='Markdown')
+        return
+    
+    response = "📅 **EVENT LIST** (sắp xếp theo thời gian)\n\n"
+    
+    # Separate timed and non-timed events
+    timed_events = [e for e in events if e["time_info"].get("has_time")]
+    no_time_events = [e for e in events if not e["time_info"].get("has_time")]
+    
+    # Show timed events first
+    if timed_events:
+        response += "⏰ **Có thời gian:**\n"
+        for event in timed_events:
+            time_display = event["time_info"].get("display_time", "")
+            response += f"• {event['text']} - {time_display} (ID: {event['id']})\n"
+        response += "\n"
+    
+    # Show non-timed events
+    if no_time_events:
+        response += "📝 **Chưa có thời gian:**\n"
+        for event in no_time_events:
+            response += f"• {event['text']} (ID: {event['id']})\n"
+        response += "\n"
+    
+    response += f"📊 Tổng: {len(events)} events"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@check_user_access
+async def idealist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View idea list"""
+    user_id = update.effective_user.id
+    ideas = await db_manager.get_ideas(user_id)
+    
+    if not ideas:
+        response = "💡 **Idea list trống**\n\n"
+        response += "Thêm idea bằng: `/idea ý tưởng của bạn`"
+        await update.message.reply_text(response, parse_mode='Markdown')
+        return
+    
+    response = "💡 **IDEA LIST** (mới nhất trước)\n\n"
+    
+    for idea in ideas[:20]:  # Show latest 20 ideas
+        response += f"• {idea['text']} (ID: {idea['id']})\n"
+    
+    if len(ideas) > 20:
+        response += f"\n... và {len(ideas) - 20} ideas khác"
+    
+    response += f"\n📊 Tổng: {len(ideas)} ideas"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@check_user_access
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mark todo as completed using fuzzy search"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Cần mô tả task cần hoàn thành!\n"
+            "Ví dụ: `/done dọn nhà`\n"
+            "Bot sẽ tìm task phù hợp nhất!",
+            parse_mode='Markdown'
+        )
+        return
+    
+    search_text = " ".join(context.args)
+    
+    # Use fuzzy search to complete todo
+    success = await db_manager.complete_todo_fuzzy(user_id, search_text)
     
     if success:
         await update.message.reply_text(
             f"✅ **Task hoàn thành!**\n\n"
-            f"📝 {description}",
+            f"🔍 Tìm kiếm: '{search_text}'\n"
+            f"📝 Task đã được đánh dấu hoàn thành!",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f"❌ Không tìm thấy task: '{description}'\n\n"
-            f"Dùng `/list` để xem danh sách todos",
+            f"❌ Không tìm thấy task phù hợp!\n\n"
+            f"🔍 Tìm kiếm: '{search_text}'\n"
+            f"💡 Dùng `/todolist` để xem danh sách",
             parse_mode='Markdown'
         )
 
+# Additional helper functions for deletion (optional)
 @check_user_access
-async def eventdone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove event by description"""
+async def delete_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete event using fuzzy search"""
     user_id = update.effective_user.id
     
     if not context.args:
         await update.message.reply_text(
-            "❌ Cần mô tả event cần xóa.\n"
-            "Ví dụ: `/eventdone thợ lắp đồ`",
+            "❌ Cần mô tả event cần xóa!\n"
+            "Ví dụ: `/delete_event meeting`",
             parse_mode='Markdown'
         )
         return
     
-    description = " ".join(context.args)
-    
-    # Try to remove by description
-    success = data_manager.remove_event(user_id, description=description)
+    search_text = " ".join(context.args)
+    success = await db_manager.delete_event_fuzzy(user_id, search_text)
     
     if success:
         await update.message.reply_text(
             f"🗑️ **Event đã xóa!**\n\n"
-            f"📅 {description}",
+            f"🔍 Tìm kiếm: '{search_text}'",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f"❌ Không tìm thấy event: '{description}'\n\n"
-            f"Dùng `/idea` để xem danh sách events",
+            f"❌ Không tìm thấy event phù hợp!\n\n"
+            f"🔍 Tìm kiếm: '{search_text}'",
             parse_mode='Markdown'
         )
 
 @check_user_access
-async def ideadone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove idea by description"""
+async def delete_idea_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete idea using fuzzy search"""
     user_id = update.effective_user.id
     
     if not context.args:
         await update.message.reply_text(
-            "❌ Cần mô tả idea cần xóa.\n"
-            "Ví dụ: `/ideadone mua sữa`",
+            "❌ Cần mô tả idea cần xóa!\n"
+            "Ví dụ: `/delete_idea học guitar`",
             parse_mode='Markdown'
         )
         return
     
-    description = " ".join(context.args)
-    
-    # Try to remove by description
-    success = data_manager.remove_idea(user_id, description=description)
+    search_text = " ".join(context.args)
+    success = await db_manager.delete_idea_fuzzy(user_id, search_text)
     
     if success:
         await update.message.reply_text(
             f"🗑️ **Idea đã xóa!**\n\n"
-            f"💡 {description}",
+            f"🔍 Tìm kiếm: '{search_text}'",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f"❌ Không tìm thấy idea: '{description}'\n\n"
-            f"Dùng `/idea` để xem danh sách ideas",
+            f"❌ Không tìm thấy idea phù hợp!\n\n"
+            f"🔍 Tìm kiếm: '{search_text}'",
             parse_mode='Markdown'
         )
-
-# Additional helper functions
-async def add_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Explicit event adding (if needed)"""
-    pass
-
-async def add_todo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Explicit todo adding (if needed)"""
-    pass
