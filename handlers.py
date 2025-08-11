@@ -2,7 +2,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from config import ALLOWED_USERS
-from gemini_service import parse_vietnamese_time, parse_priority
+from gemini_service import parse_vietnamese_time, parse_priority, clean_priority_from_text
 from supabase_service import db_manager
 
 def check_user_access(func):
@@ -37,20 +37,21 @@ Chào mừng! Tôi có thể giúp bạn quản lý:
 - `/idealist` - Xem danh sách ideas
 
 ⏰ **Thời gian hỗ trợ:**
+- sáng (9h), chiều (17h), tối (20h), đêm (22h)
 - hôm nay, mai, thứ 6, thứ 6 tuần sau
 - 19/10, ngày 25/12
-- Tự động chuyển thành "thứ X, ngày DD/MM"
+- Thứ tự linh hoạt: "tối thứ 3" hoặc "thứ 3 tối"
 
-🎯 **Mức độ ưu tiên todos:**
-- urgent (gấp) 🔴
-- normal (bình thường) 🟡  
-- chill (không gấp) 🟢
+🎯 **Mức độ ưu tiên:**
+- prio:1 (urgent) 🔴
+- prio:2 (normal) 🟡  
+- prio:3 (chill) 🟢
 
 **Ví dụ:**
-- `/todo dọn nhà thứ 6 gấp`
-- `/event meeting mai 14h`
+- `/todo tối thứ 6 đón mèo prio:1`
+- `/todo đón mèo tối thứ 6 prio:1`
+- `/event meeting chiều mai`
 - `/idea học tiếng Nhật`
-- `/done dọn nhà`
 """
     await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
@@ -61,36 +62,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🆘 **HƯỚNG DẪN CHI TIẾT**
 
 ✅ **TODOS:**
-• `/todo dọn nhà thứ 6` - Todo bình thường
-• `/todo học bài mai gấp` - Todo khẩn cấp
-• `/todo mua sắm chill` - Todo không gấp
+• `/todo dọn nhà tối thứ 6 prio:1` - Todo khẩn cấp
+• `/todo mua sắm sáng mai prio:2` - Todo bình thường
+• `/todo đọc sách prio:3` - Todo không gấp
 • `/todolist` - Xem todos (sắp xếp theo mức độ + thời gian)
 • `/done dọn` - Hoàn thành (tìm kiếm mờ)
 
 📅 **EVENTS:**
-• `/event họp thứ 2 9h` - Tạo sự kiện
-• `/event sinh nhật 25/12` - Sự kiện theo ngày
+• `/event họp chiều thứ 2` - Tạo sự kiện
+• `/event sinh nhật tối 25/12` - Sự kiện theo ngày
 • `/eventlist` - Xem events (sắp xếp theo thời gian)
 
 💡 **IDEAS:**
 • `/idea học guitar` - Lưu ý tưởng
 • `/idealist` - Xem tất cả ideas
 
-⏰ **Định dạng thời gian:**
-• `hôm nay`, `mai`
-• `thứ 2`, `thứ 3`, ..., `chủ nhật`
-• `thứ 6 tuần sau` - Thứ 6 tuần tới
-• `19/10`, `ngày 25/12` - Ngày cụ thể
+⏰ **Thời gian linh hoạt:**
+• `sáng` = 09:00, `chiều` = 17:00, `tối` = 20:00, `đêm` = 22:00
+• Thứ tự bất kỳ: `tối thứ 3` = `thứ 3 tối` = `đón mèo tối thứ 3`
+• `hôm nay`, `mai`, `thứ 6 tuần sau`
 
-🎯 **Mức độ ưu tiên (tự động nhận diện):**
-• 🔴 **urgent**: gấp, khẩn cấp, quan trọng
-• 🟡 **normal**: mặc định
-• 🟢 **chill**: không gấp, rảnh rỗi
+🎯 **Mức độ ưu tiên:**
+• 🔴 **prio:1**: khẩn cấp, quan trọng
+• 🟡 **prio:2**: bình thường (mặc định)
+• 🟢 **prio:3**: không gấp, chill
 
 🔍 **Fuzzy Search:**
-Bot sử dụng tìm kiếm mờ cho `/done` - bạn chỉ cần gõ một phần tên task!
+Bot tìm kiếm thông minh - chỉ cần gõ một phần tên task!
 
-**Bắt đầu ngay:** `/todo học tiếng Anh mai`
+**Bắt đầu:** `/todo tối mai học tiếng Anh prio:1`
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -102,7 +102,8 @@ async def todo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ Cần mô tả công việc!\n"
-            "Ví dụ: `/todo dọn nhà thứ 6 gấp`",
+            "Ví dụ: `/todo tối thứ 6 đón mèo prio:1`\n"
+            "Thứ tự từ linh hoạt!",
             parse_mode='Markdown'
         )
         return
@@ -113,15 +114,9 @@ async def todo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time_info = parse_vietnamese_time(text)
     priority = parse_priority(text)
     
-    # Clean text
+    # Clean text from both time and priority
     clean_text = time_info.get("parsed_text", text)
-    
-    # Remove priority keywords from text
-    priority_keywords = ['gấp', 'khẩn cấp', 'quan trọng', 'chill', 'không gấp', 'rảnh']
-    for keyword in priority_keywords:
-        clean_text = clean_text.replace(keyword, '').strip()
-    
-    clean_text = ' '.join(clean_text.split())  # Remove extra spaces
+    clean_text = clean_priority_from_text(clean_text)
     
     # Add to database
     todo = await db_manager.add_todo(user_id, clean_text, time_info, priority)
@@ -151,7 +146,7 @@ async def event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ Cần mô tả sự kiện!\n"
-            "Ví dụ: `/event meeting thứ 6 14h`",
+            "Ví dụ: `/event meeting chiều thứ 6`",
             parse_mode='Markdown'
         )
         return
@@ -215,7 +210,7 @@ async def todolist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not todos:
         response = "📋 **Todolist trống**\n\n"
-        response += "Thêm todo bằng: `/todo công việc thời gian`"
+        response += "Thêm todo bằng: `/todo công việc thời gian prio:X`"
         await update.message.reply_text(response, parse_mode='Markdown')
         return
     
@@ -336,7 +331,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ Cần mô tả task cần hoàn thành!\n"
-            "Ví dụ: `/done dọn nhà`\n"
+            "Ví dụ: `/done đón mèo`\n"
             "Bot sẽ tìm task phù hợp nhất!",
             parse_mode='Markdown'
         )
