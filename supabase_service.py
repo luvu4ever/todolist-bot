@@ -13,10 +13,28 @@ class SupabaseManager:
     
     async def add_todo(self, user_id: int, text: str, time_info: Dict, priority: str = 'normal') -> Dict:
         """Add new todo to Supabase"""
+        # Extract time components from time_info
+        has_time = time_info.get("has_time", False)
+        task_date = None
+        task_time = None
+        display_time = time_info.get("display_time", "")
+        
+        if has_time and time_info.get("datetime"):
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(time_info["datetime"])
+                task_date = dt.date()
+                task_time = dt.time()
+            except:
+                has_time = False
+        
         todo_data = {
             "user_id": str(user_id),
             "text": text,
-            "time_info": time_info,
+            "has_time": has_time,
+            "task_date": task_date.isoformat() if task_date else None,
+            "task_time": task_time.isoformat() if task_time else None,
+            "display_time": display_time,
             "priority": priority,
             "completed": False,
             "type": "todo",
@@ -32,10 +50,28 @@ class SupabaseManager:
     
     async def add_event(self, user_id: int, text: str, time_info: Dict) -> Dict:
         """Add new event to Supabase"""
+        # Extract time components from time_info
+        has_time = time_info.get("has_time", False)
+        event_date = None
+        event_time = None
+        display_time = time_info.get("display_time", "")
+        
+        if has_time and time_info.get("datetime"):
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(time_info["datetime"])
+                event_date = dt.date()
+                event_time = dt.time()
+            except:
+                has_time = False
+        
         event_data = {
             "user_id": str(user_id),
             "text": text,
-            "time_info": time_info,
+            "has_time": has_time,
+            "event_date": event_date.isoformat() if event_date else None,
+            "event_time": event_time.isoformat() if event_time else None,
+            "display_time": display_time,
             "type": "event",
             "created_at": datetime.now().isoformat()
         }
@@ -80,10 +116,11 @@ class SupabaseManager:
                 priority_score = priority_order.get(todo.get("priority", "normal"), 1)
                 
                 # Get datetime for sorting
-                time_info = todo.get("time_info", {})
-                if time_info.get("has_time") and time_info.get("datetime"):
+                if todo.get("has_time") and todo.get("task_date"):
                     try:
-                        dt = datetime.fromisoformat(time_info["datetime"])
+                        date_str = todo["task_date"]
+                        time_str = todo.get("task_time", "09:00:00")
+                        dt = datetime.fromisoformat(f"{date_str} {time_str}")
                         return (priority_score, dt)
                     except:
                         pass
@@ -104,10 +141,12 @@ class SupabaseManager:
             
             # Sort by time
             def sort_key(event):
-                time_info = event.get("time_info", {})
-                if time_info.get("has_time") and time_info.get("datetime"):
+                if event.get("has_time") and event.get("event_date"):
                     try:
-                        return datetime.fromisoformat(time_info["datetime"])
+                        date_str = event["event_date"]
+                        time_str = event.get("event_time", "09:00:00")
+                        dt = datetime.fromisoformat(f"{date_str} {time_str}")
+                        return dt
                     except:
                         pass
                 return datetime.max

@@ -232,8 +232,8 @@ async def todolist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for todo in urgent_todos:
             status = "☑️" if todo["completed"] else "⬜"
             time_display = ""
-            if todo["time_info"].get("has_time"):
-                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            if todo.get("has_time") and todo.get("display_time"):
+                time_display = f" - {todo['display_time']}"
             
             response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
         response += "\n"
@@ -244,8 +244,8 @@ async def todolist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for todo in normal_todos:
             status = "☑️" if todo["completed"] else "⬜"
             time_display = ""
-            if todo["time_info"].get("has_time"):
-                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            if todo.get("has_time") and todo.get("display_time"):
+                time_display = f" - {todo['display_time']}"
             
             response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
         response += "\n"
@@ -256,8 +256,8 @@ async def todolist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for todo in chill_todos:
             status = "☑️" if todo["completed"] else "⬜"
             time_display = ""
-            if todo["time_info"].get("has_time"):
-                time_display = f" - {todo['time_info'].get('display_time', '')}"
+            if todo.get("has_time") and todo.get("display_time"):
+                time_display = f" - {todo['display_time']}"
             
             response += f"{status} {todo['text']}{time_display} (ID: {todo['id']})\n"
         response += "\n"
@@ -282,14 +282,14 @@ async def eventlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = "📅 **EVENT LIST** (sắp xếp theo thời gian)\n\n"
     
     # Separate timed and non-timed events
-    timed_events = [e for e in events if e["time_info"].get("has_time")]
-    no_time_events = [e for e in events if not e["time_info"].get("has_time")]
+    timed_events = [e for e in events if e.get("has_time")]
+    no_time_events = [e for e in events if not e.get("has_time")]
     
     # Show timed events first
     if timed_events:
         response += "⏰ **Có thời gian:**\n"
         for event in timed_events:
-            time_display = event["time_info"].get("display_time", "")
+            time_display = event.get("display_time", "")
             response += f"• {event['text']} - {time_display} (ID: {event['id']})\n"
         response += "\n"
     
